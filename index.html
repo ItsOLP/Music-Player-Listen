@@ -278,7 +278,8 @@
                 
                 if (hostPlaying) {
                     const onCanPlay = () => {
-                        log("Ready to play.");
+                        log(`Ready to play. (ReadyState: ${audio.readyState}, NetworkState: ${audio.networkState})`);
+                        log(`Audio Source: ${audio.src}`);
                         audio.play().then(() => {
                             log("Playing.");
                             document.getElementById('status').innerText = "Live";
