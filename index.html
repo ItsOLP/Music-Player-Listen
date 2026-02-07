@@ -142,10 +142,14 @@
         
         if (audio.error.code === 4 || audio.error.code === 2) {
             retryCount++;
-            const delay = Math.min(2000 * retryCount, 10000);
+            const delay = Math.min(2000 * retryCount, 15000);
             log(`Retrying in ${delay/1000}s... (Attempt ${retryCount})`);
             document.getElementById('status').innerText = `Retrying (${retryCount})...`;
             
+            // Clear source to let browser "forget" the failed request
+            audio.removeAttribute('src');
+            audio.load();
+
             if (currentLoadTimeout) clearTimeout(currentLoadTimeout);
             currentLoadTimeout = setTimeout(() => { 
                 if (lastState) {
