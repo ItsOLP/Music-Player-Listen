@@ -129,6 +129,8 @@
     async function handleStateUpdate(state) {
         const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?idx=${state.current_idx}`;
         const isNewSong = !lastState || lastState.current_idx !== state.current_idx;
+        const hostJustResumed = lastState && !lastState.is_playing && state.is_playing;
+        const initialSync = !lastState;
 
         if (isNewSong) {
             log("New song detected. Loading...");
@@ -138,13 +140,33 @@
         }
 
         if (state.is_playing) {
-            if (audio.paused) audio.play().catch(() => {});
-            if (audio.readyState >= 1) {
-                const diff = Math.abs(audio.currentTime - state.playback_time);
-                if (diff > 3) audio.currentTime = state.playback_time;
+            if (audio.paused) {
+                audio.play().catch(e => log("Auto-play failed: " + e.message));
+            }
+            
+            // Sync playback time ONLY on specific events:
+            // 1. Initial connect
+            // 2. New song starts
+            // 3. Host was paused and now playing
+            if (initialSync || isNewSong || hostJustResumed) {
+                log(`Syncing time: ${state.playback_time}s (Event: ${initialSync ? 'Connect' : isNewSong ? 'New Song' : 'Host Resumed'})`);
+                
+                const applySync = () => {
+                    audio.currentTime = state.playback_time;
+                    log("Time sync applied.");
+                };
+
+                if (audio.readyState >= 1) {
+                    applySync();
+                } else {
+                    audio.addEventListener('loadedmetadata', applySync, { once: true });
+                }
             }
         } else {
-            if (!audio.paused) audio.pause();
+            if (!audio.paused) {
+                log("Host paused. Pausing local playback.");
+                audio.pause();
+            }
         }
 
         document.getElementById('status').innerText = state.is_playing ? "Live Now" : "Host Paused";
