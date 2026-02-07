@@ -15,134 +15,154 @@
         .btn { background: transparent; border: none; color: white; font-size: 40px; cursor: pointer; transition: 0.2s; }
         .btn:hover { transform: scale(1.1); }
         .sync-msg { margin-top: 20px; font-size: 13px; color: #555; }
-        #overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 100; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        #debug-log { position:fixed; bottom:0; left:0; right:0; height:150px; background:rgba(0,0,0,0.9); color:#0f0; font-family:monospace; font-size:10px; overflow-y:auto; padding:10px; border-top:1px solid #333; display:none; z-index:1000 }
     </style>
 </head>
 <body>
 
-</body>
-</html>
-    async function pollState() {
-        if (!isStarted || !config.url) return;
+<div class="player-card">
+    <div id="status" class="status">Offline</div>
+    <img id="p-art" class="cover" src="https://via.placeholder.com/250x250?text=MusicDL">
+    <div id="title" class="title">Welcome</div>
+    <div id="artist" class="artist">Ready to Sync</div>
+    
+    <div class="controls">
+        <button id="play-btn" class="btn" onclick="togglePlay()">▶️</button>
+    </div>
+    
+    <div id="sync-indicator" class="sync-msg">Click Connect to start listening</div>
+    <button onclick="startSync()" id="connect-btn" style="margin-top:20px; background:var(--accent); border:none; color:white; padding:10px 25px; border-radius:20px; font-weight:bold; cursor:pointer;">Connect to Session</button>
+</div>
 
-        try {
-            log("Polling Supabase for state...");
-            const res = await fetch(`${config.url}/rest/v1/playback_sync?id=eq.default`, {
-                headers: {
-                    "apikey": config.key,
-                    "Authorization": `Bearer ${config.key}`
-                }
-            });
-            if (!res.ok) {
-                log(`Poll ERROR: ${res.status} ${res.statusText}`);
-                const text = await res.text();
-                log(`Response body: ${text}`);
-                return;
-            }
-            const data = await res.json();
-            if (data && data.length > 0) {
-                log(`State received: Playing=${data[0].is_playing}, Time=${data[0].playback_time}, Index=${data[0].current_idx}`);
-                handleStateUpdate(data[0]);
-            } else {
-                log("No sync data found in table 'playback_sync' for id='default'.");
-            }
-        } catch (e) { 
-            log("Poll failed: " + e.message);
+<div id="debug-log">
+    <div style="display:flex; justify-content:space-between">
+        <b>DEBUG LOG</b>
+        <div>
+            <button onclick="copyLogs()" style="background:#333; border:1px solid #555; color:#fff; cursor:pointer; padding:2px 5px; margin-right:10px">COPY LOGS</button>
+            <button onclick="document.getElementById('debug-log').style.display='none'" style="background:none; border:none; color:#f00; cursor:pointer">CLOSE</button>
+        </div>
+    </div>
+    <div id="log-content"></div>
+</div>
+
+<button onclick="document.getElementById('debug-log').style.display='block'" style="position:fixed; bottom:10px; right:10px; opacity:0.3; background:none; border:none; color:white; cursor:pointer">Debug</button>
+
+<audio id="audio" crossorigin="anonymous"></audio>
+
+<script>
+    const logContent = document.getElementById('log-content');
+    function log(msg) {
+        const time = new Date().toLocaleTimeString();
+        const div = document.createElement('div');
+        div.textContent = `[${time}] ${msg}`;
+        if (logContent) {
+            logContent.appendChild(div);
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+        console.log(msg);
+        
+        const indicator = document.getElementById('sync-indicator');
+        if (indicator && (msg.includes("ERROR") || msg.includes("FAIL"))) {
+            indicator.style.color = "#ff4444";
+            indicator.innerText = msg;
         }
     }
 
-    async function handleStateUpdate(state) {
-        // Use current_idx as a cache buster only when the song actually changes
-        const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?idx=${state.current_idx}`;
+    function copyLogs() {
+        const content = document.getElementById('log-content').innerText;
+        navigator.clipboard.writeText(content);
+        alert("Logs copied to clipboard!");
+    }
+
+    const config = {
+        url: "https://tlxkevdgvwiomkokwjme.supabase.co",
+        key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRseGtldmRndndpb21rb2t3am1lIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDQwNDE1OSwiZXhwIjoyMDg1OTgwMTU5fQ.UXMUEzYKBCYzPRw8CymCGvFumIFQRAhDI5OD86yAFZM",
+        bucket: "music-sync"
+    };
+
+    let lastState = null;
+    let audio = document.getElementById('audio');
+    let isStarted = false;
+
+    audio.onerror = () => {
+        if (!audio.error) return;
+        const errors = {
+            1: "MEDIA_ERR_ABORTED",
+            2: "MEDIA_ERR_NETWORK",
+            3: "MEDIA_ERR_DECODE",
+            4: "MEDIA_ERR_SRC_NOT_SUPPORTED (Check CORS/Permissions)"
+        };
+        log(`!!! AUDIO ERROR: ${errors[audio.error.code] || "Unknown"}`);
+    };
+
+    audio.oncanplay = () => {
+        if (lastState && lastState.is_playing && audio.paused) {
+            audio.play().catch(e => log("Auto-play failed: " + e.message));
+        }
+    };
+
+    function startSync() {
+        log("Connecting to Supabase...");
+        document.getElementById('connect-btn').style.display = 'none';
+        document.getElementById('status').innerText = "Connecting...";
+        isStarted = true;
         
+        audio.play().then(() => {
+            log("Audio context unlocked.");
+        }).catch(e => log("Initial unlock: " + e.message));
+
+        pollState();
+        setInterval(pollState, 3000);
+    }
+
+    async function pollState() {
+        if (!isStarted) return;
+        try {
+            const res = await fetch(`${config.url}/rest/v1/playback_sync?id=eq.default`, {
+                headers: { "apikey": config.key, "Authorization": `Bearer ${config.key}` }
+            });
+            const data = await res.json();
+            if (data && data.length > 0) handleStateUpdate(data[0]);
+        } catch (e) { log("Poll failed: " + e.message); }
+    }
+
+    async function handleStateUpdate(state) {
+        const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?idx=${state.current_idx}`;
         const isNewSong = !lastState || lastState.current_idx !== state.current_idx;
-        const isFirstLoad = !lastState;
 
         if (isNewSong) {
-            log(`New song detected (Index: ${state.current_idx}). Updating source...`);
-            log(`Source URL: ${songUrl}`);
+            log("New song detected. Loading...");
             audio.src = songUrl;
-            
-            // For iOS/Mobile: attempt to load and play immediately
             audio.load();
-            log("Audio load() called.");
-            
-            // Reset lastState to ensure we sync time after load
-            lastState = state; 
-            return; 
+            document.getElementById('p-art').src = `https://via.placeholder.com/250x250?text=${encodeURIComponent(state.title || 'Music')}`;
         }
 
-        // Sync playback state (Play/Pause)
         if (state.is_playing) {
-            if (audio.paused) {
-                log("Host is playing. Starting playback...");
-                audio.play().then(() => {
-                    log("Playback started successfully.");
-                }).catch(e => {
-                    log("Play failed: " + e.message);
-                    if (e.name === "NotAllowedError") {
-                        log("HINT: Browser blocked autoplay. User MUST click the screen first.");
-                    }
-                });
-            }
-            
-            // Sync time if offset is > 3 seconds and audio is ready
-            if (audio.readyState >= 1) { // HAVE_METADATA
+            if (audio.paused) audio.play().catch(() => {});
+            if (audio.readyState >= 1) {
                 const diff = Math.abs(audio.currentTime - state.playback_time);
-                if (diff > 3) { 
-                    log(`Time drift detected (${diff.toFixed(2)}s). Adjusting to ${state.playback_time.toFixed(2)}s`);
-                    audio.currentTime = state.playback_time;
-                }
-            } else {
-                log(`Audio not ready for seek (readyState: ${audio.readyState})`);
+                if (diff > 3) audio.currentTime = state.playback_time;
             }
         } else {
-            if (!audio.paused) {
-                log("Host paused. Pausing playback...");
-                audio.pause();
-            }
-        }
-
-        // Sync volume
-        if (Math.abs(audio.volume - state.volume) > 0.01) {
-            audio.volume = state.volume;
+            if (!audio.paused) audio.pause();
         }
 
         document.getElementById('status').innerText = state.is_playing ? "Live Now" : "Host Paused";
         document.getElementById('play-btn').innerText = audio.paused ? '▶️' : '⏸️';
-        
-        document.getElementById('title').innerText = state.title || "Unknown Title";
-        document.getElementById('artist').innerText = state.artist || "Unknown Artist";
-        document.getElementById('sync-indicator').innerText = "Syncing with Host in Real-time";
-        document.getElementById('sync-indicator').style.color = "#555";
-
-        // Update cover if title changed (simplistic check)
-        if (isNewSong) {
-            document.getElementById('p-art').src = `https://via.placeholder.com/250x250?text=${encodeURIComponent(state.title || 'Music')}`;
-        }
-        
+        document.getElementById('title').innerText = state.title || "No Title";
+        document.getElementById('artist').innerText = state.artist || "No Artist";
+        document.getElementById('sync-indicator').innerText = "In Sync with Host";
         lastState = state;
     }
 
     function togglePlay() {
-        if (audio.paused) {
-            // When user clicks play, force sync back to host time
-            if (lastState) {
-                audio.currentTime = lastState.playback_time;
-                audio.play();
-            }
+        if (audio.paused && lastState) {
+            audio.currentTime = lastState.playback_time;
+            audio.play();
         } else {
             audio.pause();
         }
-        document.getElementById('play-btn').innerText = audio.paused ? '▶️' : '⏸️';
     }
-
-    // Prevent seeking
-    audio.onseeking = () => {
-        if (lastState && Math.abs(audio.currentTime - lastState.playback_time) > 2) {
-            audio.currentTime = lastState.playback_time;
-        }
-    };
 </script>
 </body>
 </html>
