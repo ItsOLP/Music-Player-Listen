@@ -157,7 +157,12 @@
         log("Extracting metadata...");
         jsmediatags.read(url, {
             onSuccess: function(tag) {
-                const { picture } = tag.tags;
+                const { title, artist, picture } = tag.tags;
+                
+                // Update Title and Artist from file metadata
+                if (title) document.getElementById('title').innerText = title;
+                if (artist) document.getElementById('artist').innerText = artist;
+                
                 if (picture) {
                     const { data, format } = picture;
                     let base64String = "";
@@ -166,9 +171,9 @@
                     }
                     const base64 = "data:" + format + ";base64," + window.btoa(base64String);
                     document.getElementById('p-art').src = base64;
-                    log("Cover art loaded.");
+                    log("Metadata & Cover loaded from file.");
                 } else {
-                    log("No picture in metadata.");
+                    log("Metadata loaded (no picture).");
                 }
             },
             onError: function(error) {
@@ -187,9 +192,11 @@
         document.getElementById('status').innerText = "Connecting...";
         isStarted = true;
         
+        // Unlock audio context
         audio.play().then(() => {
             log("Audio context unlocked.");
-        }).catch(e => log("Initial unlock: " + e.message));
+            audio.pause();
+        }).catch(e => log("Initial unlock error: " + e.message));
 
         pollState();
         if (syncInterval) clearInterval(syncInterval);
@@ -222,11 +229,11 @@
 
         if ((isNewSong || forceReload) && loadingSongIdx !== hostIdx) {
             loadingSongIdx = hostIdx;
-            log(`New track detected: "${state.title || 'Unknown'}"`);
+            log(`Track changed (Index: ${hostIdx}). Syncing metadata from file...`);
             
-            // 1. Update UI to loading state immediately
-            document.getElementById('title').innerText = state.title || "Loading Title...";
-            document.getElementById('artist').innerText = state.artist || "Loading Artist...";
+            // 1. Reset UI to generic loading state (we'll get real info from metadata)
+            document.getElementById('title').innerText = "Loading Track...";
+            document.getElementById('artist').innerText = "Extracting Metadata...";
             document.getElementById('p-art').src = "https://via.placeholder.com/250x250?text=Syncing...";
             document.getElementById('status').innerText = "Syncing Song...";
 
@@ -236,15 +243,27 @@
             audio.load();
 
             // 3. Wait for host to finish uploading (2.5 second buffer)
-            log("Waiting for file upload to stabilize...");
+            log("Waiting for file to stabilize...");
             setTimeout(() => {
                 const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?v=${hostIdx}&t=${Date.now()}`;
                 audio.src = songUrl;
                 audio.load();
+                
                 isManualPaused = false; 
                 
+                // IMPORTANT: Metadata extraction now updates the UI
                 extractMetadata(songUrl);
+                
+                // Position sync
                 syncPosition(hostTime, "New Song");
+                
+                // Explicitly start playback if host is playing
+                if (hostPlaying) {
+                    audio.play().then(() => {
+                        log("Playback started.");
+                    }).catch(e => log("Auto-play failed: " + e.message));
+                }
+                
                 loadingSongIdx = -1;
             }, 2500); 
             
@@ -252,7 +271,7 @@
             return;
         }
 
-        // If we are currently waiting for a song to load, don't do position sync yet
+        // If we are currently waiting for a song to load, don't do position/play sync yet
         if (loadingSongIdx !== -1) return;
 
         if (hostPlaying && !isManualPaused) {
