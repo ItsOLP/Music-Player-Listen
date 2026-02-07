@@ -8,7 +8,7 @@
         :root { --bg: #030303; --text: #fff; --accent: #ff0000; --dim: #aaa; }
         body { font-family: 'Roboto', sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; }
         .player-card { background: #111; border: 1px solid #222; border-radius: 12px; padding: 30px; width: 350px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .cover { width: 250px; height: 250px; border-radius: 8px; object-fit: cover; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); background: #222; }
+        .cover { width: 250px; height: 250px; border-radius: 8px; object-fit: cover; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); background: #222; transition: opacity 0.3s; }
         .title { font-size: 18px; font-weight: bold; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 22px; }
         .artist { color: var(--dim); margin-bottom: 20px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 18px; }
         .status { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; font-weight: bold; }
@@ -106,7 +106,6 @@
 
     let config = { ...defaultConfig };
 
-    // Try to load config from hash
     try {
         if (window.location.hash) {
             const hash = window.location.hash.substring(1);
@@ -131,30 +130,19 @@
 
     audio.onerror = () => {
         if (!audio.error) return;
-        
-        // Ignore errors if we have no src (resetting)
         if (!audio.src || audio.src === window.location.href) return;
 
-        const errors = {
-            1: "MEDIA_ERR_ABORTED",
-            2: "MEDIA_ERR_NETWORK",
-            3: "MEDIA_ERR_DECODE",
-            4: "MEDIA_ERR_SRC_NOT_SUPPORTED"
-        };
-        const errorMsg = errors[audio.error.code] || "Unknown";
-        
-        log(`!!! AUDIO ERROR: ${errorMsg} (Code: ${audio.error.code})`);
-        log(`Current Source: ${audio.src}`);
+        const errors = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
+        log(`!!! AUDIO ERROR: ${errors[audio.error.code] || "Unknown"}`);
         
         if (audio.error.code === 4 || audio.error.code === 2) {
             retryCount++;
             const delay = Math.min(2000 * retryCount, 15000);
             log(`Retrying in ${delay/1000}s... (Attempt ${retryCount})`);
-            document.getElementById('status').innerText = `Retrying (${retryCount})...`;
+            document.getElementById('status').innerText = `Retrying Load...`;
             
-            // Critical: Don't loop if we keep failing instantly
-            if (retryCount > 15) {
-                log("Too many retries. Please refresh or check host.");
+            if (retryCount > 20) {
+                log("Too many retries. Host might still be uploading.");
                 return;
             }
 
@@ -178,28 +166,6 @@
         }
         curr.innerText = formatTime(audio.currentTime);
     };
-
-    function extractMetadata(url, targetIdx) {
-        jsmediatags.read(url, {
-            onSuccess: function(tag) {
-                if (loadingSongIdx !== -1 && loadingSongIdx !== targetIdx) return;
-                if (lastState && lastState.current_idx !== targetIdx) return;
-
-                const { title, artist, picture } = tag.tags;
-                if (picture) {
-                    const { data, format } = picture;
-                    let base64String = "";
-                    for (let i = 0; i < data.length; i++) {
-                        base64String += String.fromCharCode(data[i]);
-                    }
-                    const base64 = "data:" + format + ";base64," + window.btoa(base64String);
-                    document.getElementById('p-art').src = base64;
-                    log("High-res cover loaded from file.");
-                }
-            },
-            onError: function(error) {} 
-        });
-    }
 
     function startSync() {
         log("Connecting to Supabase...");
@@ -241,92 +207,93 @@
         const hostTitle = state.title || "Unknown Title";
         const hostArtist = state.artist || "Unknown Artist";
 
-        // Calculate actual host time based on updated_at latency
         if (state.updated_at && hostPlaying) {
             const updatedAt = new Date(state.updated_at).getTime();
             const now = Date.now();
             const latency = (now - updatedAt) / 1000;
-            if (latency > 0 && latency < 30) { // Reasonable latency
-                hostTime += latency;
-            }
+            if (latency > 0 && latency < 30) hostTime += latency;
         }
 
         const isNewSong = (!lastState || hostIdx !== lastState.current_idx) && hostIdx !== -1;
 
-        if ((isNewSong || forceReload) && loadingSongIdx !== hostIdx) {
-            loadingSongIdx = hostIdx;
-            if (!forceReload) retryCount = 0; 
+        if (isNewSong && !forceReload) {
+            log(`Track changed detected: ${hostTitle}. Waiting on Host...`);
             
-            if (currentLoadTimeout) clearTimeout(currentLoadTimeout);
-            
-            log(`${forceReload ? "Retrying" : "Track changed to"}: ${hostTitle} - ${hostArtist}`);
-            
-            document.getElementById('title').innerText = hostTitle;
-            document.getElementById('artist').innerText = hostArtist;
-            document.getElementById('status').innerText = forceReload ? `Retrying Load...` : "Loading Audio...";
-            
-            const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_cover.jpg?v=${hostIdx}&t=${Date.now()}`;
-            document.getElementById('p-art').src = coverUrl;
-            
+            // 1. STOP IMMEDIATELY
             audio.pause();
-            audio.removeAttribute('src');
+            audio.src = '';
             audio.load();
             
-            const waitTime = forceReload ? 1500 : 3500;
-            if (!forceReload) log(`Waiting ${waitTime/1000}s for server upload...`);
+            // 2. CLEAR UI & CACHE
+            document.getElementById('p-art').style.opacity = '0.3';
+            document.getElementById('title').innerText = "Waiting...";
+            document.getElementById('artist').innerText = "Host is uploading song";
+            document.getElementById('status').innerText = "Waiting on Host...";
+            document.getElementById('progress-fill').style.width = '0%';
             
+            loadingSongIdx = hostIdx;
+            retryCount = 0;
+            if (currentLoadTimeout) clearTimeout(currentLoadTimeout);
+            
+            // Initial wait for upload
             currentLoadTimeout = setTimeout(() => {
-                const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?v=${hostIdx}&t=${Date.now()}`;
-                
-                log("Setting audio source...");
-                audio.src = songUrl;
-                audio.load();
-                
-                isManualPaused = false; 
-                syncPosition(hostTime, "Load");
-                
-                if (hostPlaying) {
-                    const onCanPlay = () => {
-                        log(`Ready to play. (ReadyState: ${audio.readyState}, NetworkState: ${audio.networkState})`);
-                        log(`Audio Source: ${audio.src}`);
-                        audio.play().then(() => {
-                            log("Playing.");
-                            document.getElementById('status').innerText = "Live";
-                        }).catch(e => {
-                            log("Play blocked: " + e.message);
-                            document.getElementById('status').innerText = "Click Play";
-                        });
-                        audio.removeEventListener('canplay', onCanPlay);
-                    };
-                    audio.addEventListener('canplay', onCanPlay);
-                } else {
-                    document.getElementById('status').innerText = "Host Paused";
-                }
-                
-                loadingSongIdx = -1;
-                currentLoadTimeout = null;
-                extractMetadata(songUrl, hostIdx);
-            }, waitTime); 
+                handleStateUpdate(state, true);
+            }, 3500);
             
             lastState = state;
             return;
         }
 
+        if (forceReload && loadingSongIdx === hostIdx) {
+            log(`Attempting to load new track: ${hostTitle}`);
+            document.getElementById('title').innerText = hostTitle;
+            document.getElementById('artist').innerText = hostArtist;
+            document.getElementById('status').innerText = "Loading Audio...";
+            
+            // Load Cover (can load slowly)
+            const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_cover.jpg?v=${hostIdx}&t=${Date.now()}`;
+            document.getElementById('p-art').src = coverUrl;
+            document.getElementById('p-art').style.opacity = '1';
+            
+            const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?v=${hostIdx}&t=${Date.now()}`;
+            audio.src = songUrl;
+            audio.load();
+            
+            isManualPaused = false; 
+            
+            const onCanPlay = () => {
+                log("Audio ready. Syncing to host time...");
+                syncPosition(hostTime, "InitialSync");
+                if (hostPlaying) {
+                    audio.play().then(() => {
+                        document.getElementById('status').innerText = "Live";
+                    }).catch(e => {
+                        log("Play blocked: " + e.message);
+                        document.getElementById('status').innerText = "Click Play";
+                    });
+                }
+                loadingSongIdx = -1;
+                currentLoadTimeout = null;
+                audio.removeEventListener('canplay', onCanPlay);
+            };
+            audio.addEventListener('canplay', onCanPlay);
+            
+            lastState = state;
+            return;
+        }
+
+        // Standard Sync logic
         if (loadingSongIdx === -1) {
             if (hostPlaying && !isManualPaused) {
                 if (audio.paused && audio.readyState >= 2) {
                     audio.play().catch(e => {});
                 }
-
                 const diff = audio.currentTime - hostTime;
-                if (Math.abs(diff) > 2.0) {
-                    syncPosition(hostTime, "Drift");
-                }
+                if (Math.abs(diff) > 2.5) syncPosition(hostTime, "Drift");
             } else if (!hostPlaying && !audio.paused) {
                 audio.pause();
                 syncPosition(hostTime, "Host Pause");
             }
-
             document.getElementById('status').innerText = hostPlaying ? (isManualPaused ? "Paused by You" : "Live") : "Host Paused";
         }
 
@@ -336,22 +303,14 @@
 
     function syncPosition(t, reason) {
         if (!audio.src || isNaN(t)) return;
-        const threshold = (reason === "Load" || reason === "Manual Resume") ? 0.5 : 2.0;
-        
         const apply = () => {
-            if (Math.abs(audio.currentTime - t) > threshold) {
-                audio.currentTime = t;
-                log(`Sync (${reason}) to ${t.toFixed(1)}s (diff: ${(audio.currentTime - t).toFixed(1)}s)`);
-            }
+            audio.currentTime = t;
+            log(`Sync (${reason}) to ${t.toFixed(1)}s`);
         };
 
-        if (audio.readyState >= 1) {
-            apply();
-        } else {
-            const onReady = () => {
-                apply();
-                audio.removeEventListener('loadedmetadata', onReady);
-            };
+        if (audio.readyState >= 1) apply();
+        else {
+            const onReady = () => { apply(); audio.removeEventListener('loadedmetadata', onReady); };
             audio.addEventListener('loadedmetadata', onReady);
         }
     }
@@ -359,10 +318,7 @@
     function togglePlay() {
         if (audio.paused) {
             isManualPaused = false;
-            // Sync to host immediately on manual resume
-            if (lastState) {
-                syncPosition(lastState.playback_time, "Manual Resume");
-            }
+            if (lastState) syncPosition(lastState.playback_time, "Manual Resume");
             audio.play().catch(e => log("Playback failed: " + e.message));
         } else {
             isManualPaused = true;
