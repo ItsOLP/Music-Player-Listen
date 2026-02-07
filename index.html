@@ -224,48 +224,67 @@
         const hostIdx = (state.current_idx !== undefined && state.current_idx !== null) ? state.current_idx : -1;
         const hostPlaying = !!state.is_playing;
         const hostTime = state.playback_time || 0;
+        const hostTitle = state.title || "Unknown Title";
+        const hostArtist = state.artist || "Unknown Artist";
 
         const isNewSong = (!lastState || hostIdx !== lastState.current_idx) && hostIdx !== -1;
 
         if ((isNewSong || forceReload) && loadingSongIdx !== hostIdx) {
             loadingSongIdx = hostIdx;
-            log(`Track changed (Index: ${hostIdx}). Syncing metadata from file...`);
+            log(`Track changed to: ${hostTitle} - ${hostArtist}`);
             
-            // 1. Reset UI to generic loading state (we'll get real info from metadata)
-            document.getElementById('title').innerText = "Loading Track...";
-            document.getElementById('artist').innerText = "Extracting Metadata...";
-            document.getElementById('p-art').src = "https://via.placeholder.com/250x250?text=Syncing...";
-            document.getElementById('status').innerText = "Syncing Song...";
-
-            // 2. Clear current audio
+            // 1. Update UI immediately from state metadata
+            document.getElementById('title').innerText = hostTitle;
+            document.getElementById('artist').innerText = hostArtist;
+            document.getElementById('status').innerText = "Loading Audio...";
+            
+            // 2. Try to load the cover image (uploaded by server)
+            const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_cover.jpg?v=${hostIdx}&t=${Date.now()}`;
+            const img = document.getElementById('p-art');
+            img.src = coverUrl;
+            
+            // 3. Reset audio
             audio.pause();
             audio.src = "";
             audio.load();
 
-            // 3. Wait for host to finish uploading (2.5 second buffer)
-            log("Waiting for file to stabilize...");
+            // 4. Wait for file to stabilize (3s buffer)
+            log("Waiting for server to finalize upload...");
+            document.getElementById('status').innerText = "Buffering...";
+            
             setTimeout(() => {
                 const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?v=${hostIdx}&t=${Date.now()}`;
+                
+                // Fallback extraction
+                extractMetadata(songUrl);
+
+                log("Loading audio source...");
                 audio.src = songUrl;
                 audio.load();
                 
                 isManualPaused = false; 
-                
-                // IMPORTANT: Metadata extraction now updates the UI
-                extractMetadata(songUrl);
-                
-                // Position sync
                 syncPosition(hostTime, "New Song");
                 
-                // Explicitly start playback if host is playing
                 if (hostPlaying) {
-                    audio.play().then(() => {
-                        log("Playback started.");
-                    }).catch(e => log("Auto-play failed: " + e.message));
+                    const playOnReady = () => {
+                        log("Audio ready. Starting playback...");
+                        audio.play().then(() => {
+                            log("Playback started successfully.");
+                            document.getElementById('status').innerText = "Live";
+                        }).catch(e => {
+                            log("Playback blocked or failed: " + e.message);
+                            document.getElementById('status').innerText = "Click Play to Sync";
+                        });
+                    };
+                    
+                    // Clear any existing listeners
+                    audio.oncanplay = playOnReady;
+                } else {
+                    document.getElementById('status').innerText = "Host Paused";
                 }
                 
                 loadingSongIdx = -1;
-            }, 2500); 
+            }, 3000); 
             
             lastState = state;
             return;
