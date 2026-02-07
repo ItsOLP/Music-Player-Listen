@@ -130,7 +130,8 @@
     let retryCount = 0;
 
     audio.onerror = () => {
-        if (!audio.error) return;
+        if (!audio.error || !audio.src || audio.src === window.location.href) return;
+        
         const errors = {
             1: "MEDIA_ERR_ABORTED",
             2: "MEDIA_ERR_NETWORK",
@@ -138,6 +139,13 @@
             4: "MEDIA_ERR_SRC_NOT_SUPPORTED"
         };
         const errorMsg = errors[audio.error.code] || "Unknown";
+        
+        // Ignore errors if we are intentionally resetting
+        if (loadingSongIdx !== -1) {
+            log(`Audio error ignored during load: ${errorMsg}`);
+            return;
+        }
+
         log(`!!! AUDIO ERROR: ${errorMsg}`);
         
         if (audio.error.code === 4 || audio.error.code === 2) {
@@ -146,7 +154,6 @@
             log(`Retrying in ${delay/1000}s... (Attempt ${retryCount})`);
             document.getElementById('status').innerText = `Retrying (${retryCount})...`;
             
-            // Clear source to let browser "forget" the failed request
             audio.removeAttribute('src');
             audio.load();
 
@@ -261,7 +268,8 @@
             document.getElementById('p-art').src = coverUrl;
             
             audio.pause();
-            audio.src = "";
+            audio.removeAttribute('src');
+            audio.load();
             
             const waitTime = forceReload ? 1500 : 3500;
             if (!forceReload) log(`Waiting ${waitTime/1000}s for server upload...`);
