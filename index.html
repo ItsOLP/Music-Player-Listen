@@ -64,7 +64,7 @@
 
 <button onclick="document.getElementById('debug-log').style.display='block'" style="position:fixed; bottom:10px; right:10px; opacity:0.3; background:none; border:none; color:white; cursor:pointer">Debug</button>
 
-<audio id="audio" crossorigin="anonymous"></audio>
+<audio id="audio"></audio>
 
 <script>
     const logContent = document.getElementById('log-content');
@@ -126,6 +126,7 @@
     let isManualPaused = false;
     let syncInterval = null;
     let loadingSongIdx = -1;
+    let retryCount = 0;
 
     audio.onerror = () => {
         if (!audio.error) return;
@@ -135,10 +136,20 @@
             3: "MEDIA_ERR_DECODE",
             4: "MEDIA_ERR_SRC_NOT_SUPPORTED"
         };
-        log(`!!! AUDIO ERROR: ${errors[audio.error.code] || "Unknown"}`);
+        const errorMsg = errors[audio.error.code] || "Unknown";
+        log(`!!! AUDIO ERROR: ${errorMsg}`);
+        
         if (audio.error.code === 4 || audio.error.code === 2) {
-            log("Possible upload in progress. Retrying in 3s...");
-            setTimeout(() => { if (lastState) handleStateUpdate(lastState, true); }, 3000);
+            retryCount++;
+            const delay = Math.min(2000 * retryCount, 10000);
+            log(`Retrying in ${delay/1000}s... (Attempt ${retryCount})`);
+            document.getElementById('status').innerText = `Retrying (${retryCount})...`;
+            setTimeout(() => { 
+                if (lastState) {
+                    loadingSongIdx = -1; // Reset to allow reload
+                    handleStateUpdate(lastState, true); 
+                }
+            }, delay);
         }
     };
 
@@ -153,16 +164,11 @@
         curr.innerText = formatTime(audio.currentTime);
     };
 
-    function extractMetadata(url, retryCount = 0) {
-        log("Extracting metadata...");
+    function extractMetadata(url) {
+        // We use a separate URL for metadata to avoid interfering with audio stream
         jsmediatags.read(url, {
             onSuccess: function(tag) {
                 const { title, artist, picture } = tag.tags;
-                
-                // Update Title and Artist from file metadata
-                if (title) document.getElementById('title').innerText = title;
-                if (artist) document.getElementById('artist').innerText = artist;
-                
                 if (picture) {
                     const { data, format } = picture;
                     let base64String = "";
@@ -171,18 +177,10 @@
                     }
                     const base64 = "data:" + format + ";base64," + window.btoa(base64String);
                     document.getElementById('p-art').src = base64;
-                    log("Metadata & Cover loaded from file.");
-                } else {
-                    log("Metadata loaded (no picture).");
+                    log("High-res cover loaded from file.");
                 }
             },
-            onError: function(error) {
-                log("Metadata error: " + error.info);
-                if (retryCount < 3) {
-                    log(`Retrying metadata (${retryCount + 1}/3) in 4s...`);
-                    setTimeout(() => extractMetadata(url, retryCount + 1), 4000);
-                }
-            }
+            onError: function(error) {} // Silently fail for background metadata
         });
     }
 
@@ -231,100 +229,97 @@
 
         if ((isNewSong || forceReload) && loadingSongIdx !== hostIdx) {
             loadingSongIdx = hostIdx;
-            log(`Track changed to: ${hostTitle} - ${hostArtist}`);
+            if (!forceReload) retryCount = 0; // Reset retries for actually new song
             
-            // 1. Update UI immediately from state metadata
+            log(`${forceReload ? "Retrying" : "Track changed to"}: ${hostTitle} - ${hostArtist}`);
+            
+            // 1. Update UI immediately
             document.getElementById('title').innerText = hostTitle;
             document.getElementById('artist').innerText = hostArtist;
-            document.getElementById('status').innerText = "Loading Audio...";
+            document.getElementById('status').innerText = forceReload ? `Retrying Load...` : "Loading Audio...";
             
-            // 2. Try to load the cover image (uploaded by server)
+            // 2. Load cover image (fast fallback)
             const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_cover.jpg?v=${hostIdx}&t=${Date.now()}`;
-            const img = document.getElementById('p-art');
-            img.src = coverUrl;
+            document.getElementById('p-art').src = coverUrl;
             
             // 3. Reset audio
             audio.pause();
             audio.src = "";
             audio.load();
 
-            // 4. Wait for file to stabilize (3s buffer)
-            log("Waiting for server to finalize upload...");
-            document.getElementById('status').innerText = "Buffering...";
+            // 4. Load audio with buffer
+            const waitTime = forceReload ? 1000 : 3000;
+            log(`Waiting ${waitTime/1000}s for server...`);
             
             setTimeout(() => {
                 const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?v=${hostIdx}&t=${Date.now()}`;
                 
-                // Fallback extraction
-                extractMetadata(songUrl);
-
-                log("Loading audio source...");
+                log("Setting audio source...");
                 audio.src = songUrl;
                 audio.load();
                 
                 isManualPaused = false; 
-                syncPosition(hostTime, "New Song");
+                syncPosition(hostTime, "Load");
                 
                 if (hostPlaying) {
-                    const playOnReady = () => {
-                        log("Audio ready. Starting playback...");
+                    audio.oncanplay = () => {
+                        log("Ready to play.");
                         audio.play().then(() => {
-                            log("Playback started successfully.");
+                            log("Playing.");
                             document.getElementById('status').innerText = "Live";
                         }).catch(e => {
-                            log("Playback blocked or failed: " + e.message);
-                            document.getElementById('status').innerText = "Click Play to Sync";
+                            log("Play blocked: " + e.message);
+                            document.getElementById('status').innerText = "Click Play";
                         });
+                        audio.oncanplay = null;
                     };
-                    
-                    // Clear any existing listeners
-                    audio.oncanplay = playOnReady;
                 } else {
                     document.getElementById('status').innerText = "Host Paused";
                 }
                 
                 loadingSongIdx = -1;
-            }, 3000); 
+                // Background metadata extraction
+                extractMetadata(songUrl);
+            }, waitTime); 
             
             lastState = state;
             return;
         }
 
-        // If we are currently waiting for a song to load, don't do position/play sync yet
-        if (loadingSongIdx !== -1) return;
+        // Only sync position if not loading
+        if (loadingSongIdx === -1) {
+            if (hostPlaying && !isManualPaused) {
+                if (audio.paused && audio.readyState >= 2) {
+                    audio.play().catch(e => {});
+                }
 
-        if (hostPlaying && !isManualPaused) {
-            if (audio.paused && audio.readyState >= 2) {
-                audio.play().catch(e => {});
+                const diff = audio.currentTime - hostTime;
+                if (Math.abs(diff) > 2.5) {
+                    syncPosition(hostTime, "Drift");
+                }
+            } else if (!hostPlaying && !audio.paused) {
+                audio.pause();
             }
 
-            const diff = audio.currentTime - hostTime;
-            if (Math.abs(diff) > 2.5) {
-                syncPosition(hostTime, "Drift Correction");
-            }
-        } else if (!hostPlaying && !audio.paused) {
-            audio.pause();
+            document.getElementById('status').innerText = hostPlaying ? (isManualPaused ? "Paused by You" : "Live") : "Host Paused";
         }
 
-        document.getElementById('status').innerText = hostPlaying ? (isManualPaused ? "Paused by You" : "Live") : "Host Paused";
         document.getElementById('play-btn').innerText = audio.paused ? '▶️' : '⏸️';
-        
         lastState = state;
     }
 
     function syncPosition(t, reason) {
+        if (!audio.src) return;
         const apply = () => {
-            // Only seek if the difference is significant to avoid audio hiccups
             if (Math.abs(audio.currentTime - t) > 1.5) {
                 audio.currentTime = t;
-                log(`Synced position via ${reason} to ${t.toFixed(1)}s`);
+                log(`Sync (${reason}) to ${t.toFixed(1)}s`);
             }
         };
 
         if (audio.readyState >= 1) {
             apply();
         } else {
-            // Wait for metadata to be available before seeking
             const onReady = () => {
                 apply();
                 audio.removeEventListener('loadedmetadata', onReady);
