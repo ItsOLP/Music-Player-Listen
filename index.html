@@ -125,6 +125,7 @@
     let isStarted = false;
     let isManualPaused = false;
     let syncInterval = null;
+    let currentLoadTimeout = null;
     let loadingSongIdx = -1;
     let retryCount = 0;
 
@@ -144,9 +145,11 @@
             const delay = Math.min(2000 * retryCount, 10000);
             log(`Retrying in ${delay/1000}s... (Attempt ${retryCount})`);
             document.getElementById('status').innerText = `Retrying (${retryCount})...`;
-            setTimeout(() => { 
+            
+            if (currentLoadTimeout) clearTimeout(currentLoadTimeout);
+            currentLoadTimeout = setTimeout(() => { 
                 if (lastState) {
-                    loadingSongIdx = -1; // Reset to allow reload
+                    loadingSongIdx = -1; 
                     handleStateUpdate(lastState, true); 
                 }
             }, delay);
@@ -164,10 +167,12 @@
         curr.innerText = formatTime(audio.currentTime);
     };
 
-    function extractMetadata(url) {
-        // We use a separate URL for metadata to avoid interfering with audio stream
+    function extractMetadata(url, targetIdx) {
         jsmediatags.read(url, {
             onSuccess: function(tag) {
+                if (loadingSongIdx !== -1 && loadingSongIdx !== targetIdx) return;
+                if (lastState && lastState.current_idx !== targetIdx) return;
+
                 const { title, artist, picture } = tag.tags;
                 if (picture) {
                     const { data, format } = picture;
@@ -180,7 +185,7 @@
                     log("High-res cover loaded from file.");
                 }
             },
-            onError: function(error) {} // Silently fail for background metadata
+            onError: function(error) {} 
         });
     }
 
@@ -190,7 +195,6 @@
         document.getElementById('status').innerText = "Connecting...";
         isStarted = true;
         
-        // Unlock audio context
         audio.play().then(() => {
             log("Audio context unlocked.");
             audio.pause();
@@ -221,37 +225,44 @@
         
         const hostIdx = (state.current_idx !== undefined && state.current_idx !== null) ? state.current_idx : -1;
         const hostPlaying = !!state.is_playing;
-        const hostTime = state.playback_time || 0;
+        let hostTime = state.playback_time || 0;
         const hostTitle = state.title || "Unknown Title";
         const hostArtist = state.artist || "Unknown Artist";
+
+        // Calculate actual host time based on updated_at latency
+        if (state.updated_at && hostPlaying) {
+            const updatedAt = new Date(state.updated_at).getTime();
+            const now = Date.now();
+            const latency = (now - updatedAt) / 1000;
+            if (latency > 0 && latency < 30) { // Reasonable latency
+                hostTime += latency;
+            }
+        }
 
         const isNewSong = (!lastState || hostIdx !== lastState.current_idx) && hostIdx !== -1;
 
         if ((isNewSong || forceReload) && loadingSongIdx !== hostIdx) {
             loadingSongIdx = hostIdx;
-            if (!forceReload) retryCount = 0; // Reset retries for actually new song
+            if (!forceReload) retryCount = 0; 
+            
+            if (currentLoadTimeout) clearTimeout(currentLoadTimeout);
             
             log(`${forceReload ? "Retrying" : "Track changed to"}: ${hostTitle} - ${hostArtist}`);
             
-            // 1. Update UI immediately
             document.getElementById('title').innerText = hostTitle;
             document.getElementById('artist').innerText = hostArtist;
             document.getElementById('status').innerText = forceReload ? `Retrying Load...` : "Loading Audio...";
             
-            // 2. Load cover image (fast fallback)
             const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_cover.jpg?v=${hostIdx}&t=${Date.now()}`;
             document.getElementById('p-art').src = coverUrl;
             
-            // 3. Reset audio
             audio.pause();
             audio.src = "";
-            audio.load();
-
-            // 4. Load audio with buffer
-            const waitTime = forceReload ? 1000 : 3000;
-            log(`Waiting ${waitTime/1000}s for server...`);
             
-            setTimeout(() => {
+            const waitTime = forceReload ? 1500 : 3500;
+            if (!forceReload) log(`Waiting ${waitTime/1000}s for server upload...`);
+            
+            currentLoadTimeout = setTimeout(() => {
                 const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?v=${hostIdx}&t=${Date.now()}`;
                 
                 log("Setting audio source...");
@@ -262,7 +273,7 @@
                 syncPosition(hostTime, "Load");
                 
                 if (hostPlaying) {
-                    audio.oncanplay = () => {
+                    const onCanPlay = () => {
                         log("Ready to play.");
                         audio.play().then(() => {
                             log("Playing.");
@@ -271,22 +282,22 @@
                             log("Play blocked: " + e.message);
                             document.getElementById('status').innerText = "Click Play";
                         });
-                        audio.oncanplay = null;
+                        audio.removeEventListener('canplay', onCanPlay);
                     };
+                    audio.addEventListener('canplay', onCanPlay);
                 } else {
                     document.getElementById('status').innerText = "Host Paused";
                 }
                 
                 loadingSongIdx = -1;
-                // Background metadata extraction
-                extractMetadata(songUrl);
+                currentLoadTimeout = null;
+                extractMetadata(songUrl, hostIdx);
             }, waitTime); 
             
             lastState = state;
             return;
         }
 
-        // Only sync position if not loading
         if (loadingSongIdx === -1) {
             if (hostPlaying && !isManualPaused) {
                 if (audio.paused && audio.readyState >= 2) {
@@ -294,11 +305,12 @@
                 }
 
                 const diff = audio.currentTime - hostTime;
-                if (Math.abs(diff) > 2.5) {
+                if (Math.abs(diff) > 2.0) {
                     syncPosition(hostTime, "Drift");
                 }
             } else if (!hostPlaying && !audio.paused) {
                 audio.pause();
+                syncPosition(hostTime, "Host Pause");
             }
 
             document.getElementById('status').innerText = hostPlaying ? (isManualPaused ? "Paused by You" : "Live") : "Host Paused";
@@ -309,11 +321,13 @@
     }
 
     function syncPosition(t, reason) {
-        if (!audio.src) return;
+        if (!audio.src || isNaN(t)) return;
+        const threshold = (reason === "Load" || reason === "Manual Resume") ? 0.5 : 2.0;
+        
         const apply = () => {
-            if (Math.abs(audio.currentTime - t) > 1.5) {
+            if (Math.abs(audio.currentTime - t) > threshold) {
                 audio.currentTime = t;
-                log(`Sync (${reason}) to ${t.toFixed(1)}s`);
+                log(`Sync (${reason}) to ${t.toFixed(1)}s (diff: ${(audio.currentTime - t).toFixed(1)}s)`);
             }
         };
 
