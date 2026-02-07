@@ -64,7 +64,7 @@
 
 <button onclick="document.getElementById('debug-log').style.display='block'" style="position:fixed; bottom:10px; right:10px; opacity:0.3; background:none; border:none; color:white; cursor:pointer">Debug</button>
 
-<audio id="audio"></audio>
+<audio id="audio" crossorigin="anonymous"></audio>
 
 <script>
     const logContent = document.getElementById('log-content');
@@ -130,8 +130,11 @@
     let retryCount = 0;
 
     audio.onerror = () => {
-        if (!audio.error || !audio.src || audio.src === window.location.href) return;
+        if (!audio.error) return;
         
+        // Ignore errors if we have no src (resetting)
+        if (!audio.src || audio.src === window.location.href) return;
+
         const errors = {
             1: "MEDIA_ERR_ABORTED",
             2: "MEDIA_ERR_NETWORK",
@@ -140,13 +143,8 @@
         };
         const errorMsg = errors[audio.error.code] || "Unknown";
         
-        // Ignore errors if we are intentionally resetting
-        if (loadingSongIdx !== -1) {
-            log(`Audio error ignored during load: ${errorMsg}`);
-            return;
-        }
-
-        log(`!!! AUDIO ERROR: ${errorMsg}`);
+        log(`!!! AUDIO ERROR: ${errorMsg} (Code: ${audio.error.code})`);
+        log(`Current Source: ${audio.src}`);
         
         if (audio.error.code === 4 || audio.error.code === 2) {
             retryCount++;
@@ -154,8 +152,11 @@
             log(`Retrying in ${delay/1000}s... (Attempt ${retryCount})`);
             document.getElementById('status').innerText = `Retrying (${retryCount})...`;
             
-            audio.removeAttribute('src');
-            audio.load();
+            // Critical: Don't loop if we keep failing instantly
+            if (retryCount > 15) {
+                log("Too many retries. Please refresh or check host.");
+                return;
+            }
 
             if (currentLoadTimeout) clearTimeout(currentLoadTimeout);
             currentLoadTimeout = setTimeout(() => { 
