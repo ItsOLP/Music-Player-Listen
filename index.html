@@ -272,22 +272,36 @@
             img.style.opacity = '0';
             
             let coverRetry = 0;
+            const currentSongIdAtLoadStart = hostSongId;
+            
             const loadCover = () => {
+                // Stop retrying if the song has changed since we started loading this cover
+                if (lastState && lastState.song_id !== currentSongIdAtLoadStart) return;
+
                 const tempImg = new Image();
-                tempImg.src = coverUrl + (coverRetry > 0 ? `&r=${coverRetry}` : "");
+                // Add a unique query param to bypass potential browser cache on retries
+                const retryUrl = coverUrl + (coverRetry > 0 ? `&retry=${coverRetry}` : "");
+                
                 tempImg.onload = () => {
-                    img.src = tempImg.src;
-                    img.style.opacity = '1';
+                    if (lastState && lastState.song_id === currentSongIdAtLoadStart) {
+                        img.src = tempImg.src;
+                        img.style.opacity = '1';
+                        log(`Cover loaded for ${currentSongIdAtLoadStart} after ${coverRetry} retries.`);
+                    }
                 };
+                
                 tempImg.onerror = () => {
-                    if (coverRetry < 5) {
+                    if (coverRetry < 8) { // Increased retries for slower uploads
                         coverRetry++;
-                        setTimeout(loadCover, 2000);
+                        log(`Cover not found, retrying... (${coverRetry}/8)`);
+                        setTimeout(loadCover, 2500);
                     } else {
                         img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
                         img.style.opacity = '1';
+                        log(`Cover failed after maximum retries for ${currentSongIdAtLoadStart}`);
                     }
                 };
+                tempImg.src = retryUrl;
             };
             loadCover();
             
