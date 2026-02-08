@@ -7,11 +7,11 @@
     <style>
         :root { --bg: #030303; --text: #fff; --accent: #ff0000; --dim: #aaa; }
         body { font-family: 'Roboto', sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; }
-        .player-card { background: #111; border: 1px solid #222; border-radius: 12px; padding: 30px; width: 350px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .cover { width: 250px; height: 250px; border-radius: 8px; object-fit: cover; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); background: #222 url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM0NDQiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNOSAxOGwtNS01IDUtNSIvPjxwYXRoIGQ9Ik0yMCAxM0g0Ii8+PC9zdmc+') center/40% no-repeat; transition: opacity 0.3s; }
-        .title { font-size: 18px; font-weight: bold; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 22px; }
-        .artist { color: var(--dim); margin-bottom: 20px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 18px; }
-        .status { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; font-weight: bold; }
+        .player-card { background: #000; border: none; border-radius: 12px; padding: 30px; width: 350px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.8); }
+        .cover { width: 250px; height: 250px; border-radius: 8px; object-fit: cover; margin-bottom: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.6); background: #000; transition: opacity 0.3s; }
+        .title { font-size: 20px; font-weight: bold; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 24px; }
+        .artist { color: #888; margin-bottom: 25px; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 20px; }
+        .status { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 15px; font-weight: bold; }
         
         .progress-area { margin-bottom: 20px; }
         .progress-bar-container { background: #333; height: 4px; border-radius: 2px; width: 100%; position: relative; margin-bottom: 8px; cursor: pointer; }
@@ -258,12 +258,38 @@
             document.getElementById('status').innerText = "Fetching Audio...";
             
             const cacheBust = `v=${Date.now()}`;
-            const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/${hostSongId}.m4a?${cacheBust}`;
+            const encodedId = encodeURIComponent(hostSongId);
+            const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/${encodedId}.m4a?${cacheBust}`;
+            const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/${encodedId}.jpg?${cacheBust}`;
             
-            // Force reset
+            // Force reset audio
             audio.pause();
             audio.src = "";
             audio.load();
+
+            // Load cover art with retry
+            const img = document.getElementById('p-art');
+            img.style.opacity = '0';
+            
+            let coverRetry = 0;
+            const loadCover = () => {
+                const tempImg = new Image();
+                tempImg.src = coverUrl + (coverRetry > 0 ? `&r=${coverRetry}` : "");
+                tempImg.onload = () => {
+                    img.src = tempImg.src;
+                    img.style.opacity = '1';
+                };
+                tempImg.onerror = () => {
+                    if (coverRetry < 5) {
+                        coverRetry++;
+                        setTimeout(loadCover, 2000);
+                    } else {
+                        img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+                        img.style.opacity = '1';
+                    }
+                };
+            };
+            loadCover();
             
             // Attempt to load song
             setTimeout(() => {
@@ -287,13 +313,6 @@
                     loadingSongIdx = -1;
                     currentLoadTimeout = null;
                     audio.removeEventListener('canplay', onCanPlay);
-                    
-                    // AFTER song is ready, load cover
-                    const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/${hostSongId}.jpg?${cacheBust}`;
-                    const img = document.getElementById('p-art');
-                    img.src = coverUrl;
-                    img.onload = () => { img.style.opacity = '1'; };
-                    img.onerror = () => { img.src = ""; img.style.opacity = '1'; };
                 };
                 audio.addEventListener('canplay', onCanPlay);
             }, 100);
