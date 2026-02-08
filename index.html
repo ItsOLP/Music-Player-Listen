@@ -197,6 +197,7 @@
         if (!state) return;
         
         const hostIdx = (state.current_idx !== undefined && state.current_idx !== null) ? state.current_idx : -1;
+        const hostSongId = state.song_id || "";
         const hostPlaying = !!state.is_playing;
         const hostTitle = state.title || "Unknown Title";
         const hostArtist = state.artist || "Unknown Artist";
@@ -210,31 +211,31 @@
             if (latency > 0 && latency < 30) hostTime += latency;
         }
 
-        // Improved track change detection
-        const isNewSong = (!lastState || hostIdx !== lastState.current_idx || hostTitle !== lastState.title) && hostIdx !== -1;
+        // Track change detection using Song ID
+        const isNewSong = (!lastState || hostSongId !== lastState.song_id) && hostSongId !== "";
 
         if (isNewSong && !forceReload) {
-            log(`Track change detected: ${hostTitle}. Host ${isUploading ? "is uploading..." : "is ready"}`);
+            log(`Track change detected: ${hostTitle} (ID: ${hostSongId}). Host ${isUploading ? "is uploading..." : "is ready"}`);
             
             // 1. COMPLETELY PURGE OLD AUDIO
             audio.pause();
             audio.removeAttribute('src'); 
             audio.load();
             
-            // 2. RESET UI
-            document.getElementById('p-art').style.opacity = '0.2';
+            // 2. RESET UI (Prioritize Song, Icon stays blank)
+            document.getElementById('p-art').style.opacity = '0';
             document.getElementById('title').innerText = hostTitle;
             document.getElementById('artist').innerText = hostArtist;
             document.getElementById('status').innerText = isUploading ? "Waiting for Host..." : "Loading...";
             document.getElementById('progress-fill').style.width = '0%';
             
-            loadingSongIdx = hostIdx;
+            loadingSongIdx = hostIdx; // We'll keep this as a flag that we're loading
             retryCount = 0;
             if (currentLoadTimeout) clearTimeout(currentLoadTimeout);
             
-            // If already ready, start loading after a tiny delay to ensure storage consistency
+            // Start loading process
             if (!isUploading) {
-                currentLoadTimeout = setTimeout(() => { handleStateUpdate(state, true); }, 1500);
+                currentLoadTimeout = setTimeout(() => { handleStateUpdate(state, true); }, 500);
             }
             
             lastState = state;
@@ -242,36 +243,27 @@
         }
 
         // Transition from Uploading -> Ready
-        if (loadingSongIdx === hostIdx && !isUploading && !forceReload) {
-            log(`Host upload finished. Starting load...`);
+        if (lastState && lastState.song_id === hostSongId && isUploading === false && lastState.playback_time === -1 && !forceReload) {
+            log(`Host upload finished. Starting load for ${hostSongId}...`);
             handleStateUpdate(state, true);
             return;
         }
 
-        if (forceReload && loadingSongIdx === hostIdx) {
-            log(`Loading new track: ${hostTitle}`);
-            document.getElementById('title').innerText = hostTitle;
-            document.getElementById('artist').innerText = hostArtist;
-            document.getElementById('status').innerText = "Syncing Audio...";
+        if (forceReload && hostSongId !== "") {
+            log(`Loading track: ${hostTitle} (ID: ${hostSongId})`);
+            document.getElementById('status').innerText = "Fetching Audio...";
             
-            // Aggressive Cache busting
-            const cacheBust = `v=${Date.now()}_${Math.random().toString(36).substring(7)}`;
+            const cacheBust = `v=${Date.now()}`;
+            const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/${hostSongId}.m4a?${cacheBust}`;
             
-            // Load Cover
-            const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_cover.jpg?${cacheBust}`;
-            document.getElementById('p-art').src = coverUrl;
-            document.getElementById('p-art').style.opacity = '1';
-            
-            // Load Song
-            const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?${cacheBust}`;
-            log(`Fetching: ${songUrl}`);
-            
-            // Force browser to forget old resource
+            // Force reset
             audio.pause();
             audio.src = "";
             audio.load();
             
+            // Attempt to load song
             setTimeout(() => {
+                log(`Source set to: ${hostSongId}.m4a`);
                 audio.src = songUrl;
                 audio.load();
                 
@@ -291,6 +283,13 @@
                     loadingSongIdx = -1;
                     currentLoadTimeout = null;
                     audio.removeEventListener('canplay', onCanPlay);
+                    
+                    // AFTER song is ready, load cover
+                    const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/${hostSongId}.jpg?${cacheBust}`;
+                    const img = document.getElementById('p-art');
+                    img.src = coverUrl;
+                    img.onload = () => { img.style.opacity = '1'; };
+                    img.onerror = () => { img.src = "https://via.placeholder.com/250x250?text=No+Cover"; img.style.opacity = '1'; };
                 };
                 audio.addEventListener('canplay', onCanPlay);
             }, 100);
@@ -303,7 +302,7 @@
         if (loadingSongIdx === -1) {
             if (isUploading) {
                 document.getElementById('status').innerText = "Host is switching...";
-                audio.pause();
+                if (!audio.paused) audio.pause();
             } else if (hostPlaying && !isManualPaused) {
                 if (audio.paused && audio.readyState >= 2) {
                     audio.play().catch(e => {});
