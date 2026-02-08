@@ -198,22 +198,23 @@
         
         const hostIdx = (state.current_idx !== undefined && state.current_idx !== null) ? state.current_idx : -1;
         const hostPlaying = !!state.is_playing;
-        let hostTime = state.playback_time || 0;
         const hostTitle = state.title || "Unknown Title";
         const hostArtist = state.artist || "Unknown Artist";
+        const isUploading = state.playback_time === -1;
+        let hostTime = isUploading ? 0 : (state.playback_time || 0);
 
-        if (state.updated_at && hostPlaying) {
+        if (state.updated_at && hostPlaying && !isUploading) {
             const updatedAt = new Date(state.updated_at).getTime();
             const now = Date.now();
             const latency = (now - updatedAt) / 1000;
             if (latency > 0 && latency < 30) hostTime += latency;
         }
 
-        // Improved track change detection (index + title/artist to be sure)
+        // Improved track change detection
         const isNewSong = (!lastState || hostIdx !== lastState.current_idx || hostTitle !== lastState.title) && hostIdx !== -1;
 
         if (isNewSong && !forceReload) {
-            log(`Track change: ${hostTitle}. Purging old data...`);
+            log(`Track change detected: ${hostTitle}. Host ${isUploading ? "is uploading..." : "is ready"}`);
             
             // 1. COMPLETELY PURGE OLD AUDIO
             audio.pause();
@@ -222,21 +223,28 @@
             
             // 2. RESET UI
             document.getElementById('p-art').style.opacity = '0.2';
-            document.getElementById('title').innerText = "Syncing...";
-            document.getElementById('artist').innerText = "Please wait for host upload";
-            document.getElementById('status').innerText = "Waiting on Host...";
+            document.getElementById('title').innerText = hostTitle;
+            document.getElementById('artist').innerText = hostArtist;
+            document.getElementById('status').innerText = isUploading ? "Waiting for Host..." : "Loading...";
             document.getElementById('progress-fill').style.width = '0%';
             
             loadingSongIdx = hostIdx;
             retryCount = 0;
             if (currentLoadTimeout) clearTimeout(currentLoadTimeout);
             
-            // Initial delay to give host time to finish upload
-            currentLoadTimeout = setTimeout(() => {
-                handleStateUpdate(state, true);
-            }, 4000);
+            // If already ready, start loading after a tiny delay to ensure storage consistency
+            if (!isUploading) {
+                currentLoadTimeout = setTimeout(() => { handleStateUpdate(state, true); }, 1500);
+            }
             
             lastState = state;
+            return;
+        }
+
+        // Transition from Uploading -> Ready
+        if (loadingSongIdx === hostIdx && !isUploading && !forceReload) {
+            log(`Host upload finished. Starting load...`);
+            handleStateUpdate(state, true);
             return;
         }
 
@@ -244,7 +252,7 @@
             log(`Loading new track: ${hostTitle}`);
             document.getElementById('title').innerText = hostTitle;
             document.getElementById('artist').innerText = hostArtist;
-            document.getElementById('status').innerText = "Loading Audio...";
+            document.getElementById('status').innerText = "Syncing Audio...";
             
             // Cache busting: use updated_at and a random string
             const cacheBust = `v=${encodeURIComponent(state.updated_at)}&r=${Math.random().toString(36).substring(7)}`;
@@ -286,7 +294,10 @@
 
         // Standard Sync
         if (loadingSongIdx === -1) {
-            if (hostPlaying && !isManualPaused) {
+            if (isUploading) {
+                document.getElementById('status').innerText = "Host is switching...";
+                audio.pause();
+            } else if (hostPlaying && !isManualPaused) {
                 if (audio.paused && audio.readyState >= 2) {
                     audio.play().catch(e => {});
                 }
@@ -296,7 +307,10 @@
                 audio.pause();
                 syncPosition(hostTime, "Host Pause");
             }
-            document.getElementById('status').innerText = hostPlaying ? (isManualPaused ? "Paused by You" : "Live") : "Host Paused";
+            
+            if (!isUploading) {
+                document.getElementById('status').innerText = hostPlaying ? (isManualPaused ? "Paused by You" : "Live") : "Host Paused";
+            }
         }
 
         document.getElementById('play-btn').innerText = audio.paused ? '▶️' : '⏸️';
