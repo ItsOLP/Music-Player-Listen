@@ -8,7 +8,7 @@
         :root { --bg: #030303; --text: #fff; --accent: #ff0000; --dim: #aaa; }
         body { font-family: 'Roboto', sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; }
         .player-card { background: #111; border: 1px solid #222; border-radius: 12px; padding: 30px; width: 350px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .cover { width: 250px; height: 250px; border-radius: 8px; object-fit: cover; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); background: #222; transition: opacity 0.3s; }
+        .cover { width: 250px; height: 250px; border-radius: 8px; object-fit: cover; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); background: #222 url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM0NDQiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNOSAxOGwtNS01IDUtNSIvPjxwYXRoIGQ9Ik0yMCAxM0g0Ii8+PC9zdmc+') center/40% no-repeat; transition: opacity 0.3s; }
         .title { font-size: 18px; font-weight: bold; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 22px; }
         .artist { color: var(--dim); margin-bottom: 20px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 18px; }
         .status { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; font-weight: bold; }
@@ -29,7 +29,7 @@
 
 <div class="player-card">
     <div id="status" class="status">Offline</div>
-    <img id="p-art" class="cover" src="https://via.placeholder.com/250x250?text=MusicDL">
+    <img id="p-art" class="cover" style="opacity: 1">
     <div id="title" class="title">Welcome</div>
     <div id="artist" class="artist">Ready to Sync</div>
     
@@ -133,7 +133,11 @@
         if (!audio.src || audio.src === window.location.href || audio.src.startsWith('data:')) return;
 
         const errors = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
-        log(`!!! AUDIO ERROR: ${errors[audio.error.code] || "Unknown"}`);
+        if (audio.error.code === 4) {
+            log(`Track not ready (Waiting for host to upload...)`);
+        } else {
+            log(`!!! AUDIO ERROR: ${errors[audio.error.code] || "Unknown"}`);
+        }
         
         if (audio.error.code === 4 || audio.error.code === 2) {
             retryCount++;
@@ -289,7 +293,7 @@
                     const img = document.getElementById('p-art');
                     img.src = coverUrl;
                     img.onload = () => { img.style.opacity = '1'; };
-                    img.onerror = () => { img.src = "https://via.placeholder.com/250x250?text=No+Cover"; img.style.opacity = '1'; };
+                    img.onerror = () => { img.src = ""; img.style.opacity = '1'; };
                 };
                 audio.addEventListener('canplay', onCanPlay);
             }, 100);
