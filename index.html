@@ -254,8 +254,8 @@
             document.getElementById('artist').innerText = hostArtist;
             document.getElementById('status').innerText = "Syncing Audio...";
             
-            // Cache busting: use updated_at and a random string
-            const cacheBust = `v=${encodeURIComponent(state.updated_at)}&r=${Math.random().toString(36).substring(7)}`;
+            // Aggressive Cache busting
+            const cacheBust = `v=${Date.now()}_${Math.random().toString(36).substring(7)}`;
             
             // Load Cover
             const coverUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_cover.jpg?${cacheBust}`;
@@ -266,27 +266,34 @@
             const songUrl = `${config.url}/storage/v1/object/public/${config.bucket}/current_song.m4a?${cacheBust}`;
             log(`Fetching: ${songUrl}`);
             
-            audio.src = songUrl;
+            // Force browser to forget old resource
+            audio.pause();
+            audio.src = "";
             audio.load();
             
-            isManualPaused = false; 
-            
-            const onCanPlay = () => {
-                log("Audio ready. Syncing position...");
-                syncPosition(hostTime, "InitialSync");
-                if (hostPlaying) {
-                    audio.play().then(() => {
-                        document.getElementById('status').innerText = "Live";
-                    }).catch(e => {
-                        log("Play blocked: Click Play to join.");
-                        document.getElementById('status').innerText = "Click Play";
-                    });
-                }
-                loadingSongIdx = -1;
-                currentLoadTimeout = null;
-                audio.removeEventListener('canplay', onCanPlay);
-            };
-            audio.addEventListener('canplay', onCanPlay);
+            setTimeout(() => {
+                audio.src = songUrl;
+                audio.load();
+                
+                isManualPaused = false; 
+                
+                const onCanPlay = () => {
+                    log("Audio ready. Syncing position...");
+                    syncPosition(hostTime, "InitialSync");
+                    if (hostPlaying) {
+                        audio.play().then(() => {
+                            document.getElementById('status').innerText = "Live";
+                        }).catch(e => {
+                            log("Play blocked: Click Play to join.");
+                            document.getElementById('status').innerText = "Click Play";
+                        });
+                    }
+                    loadingSongIdx = -1;
+                    currentLoadTimeout = null;
+                    audio.removeEventListener('canplay', onCanPlay);
+                };
+                audio.addEventListener('canplay', onCanPlay);
+            }, 100);
             
             lastState = state;
             return;
